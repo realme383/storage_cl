@@ -8,14 +8,20 @@ import google.generativeai as genai
 import base64
 import requests
 from io import BytesIO
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Define directories
 cache_dir = r"C:\Users\Ayan\Documents\GitHub\storage\cache"
 main_dir = r"C:\Users\Ayan\Documents\GitHub\storage\main"
 output_file = r"C:\Users\Ayan\Documents\GitHub\storage\index.json"
 
-# Gemini API Key - You should store this securely
-GEMINI_API_KEY = "AIzaSyCC6WUKOKv7sx9Uyrq6O_EHXyqD_-rkxvw"  # Replace with your actual API key
+# Get Gemini API Key from environment variables ( dont be a fool like me and hardcode it eehehheh)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY not found in environment variables. Please check your .env file.")
 
 # Configure the Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
@@ -81,7 +87,7 @@ def identify_image(image_path):
                 category = "#art"
                 
         return category
-        
+
     except Exception as e:
         print(f"Error identifying image {image_path}: {str(e)}")
         return "#art"  # Default category on error
