@@ -1,17 +1,90 @@
 import os
 import json
+import time
 from pathlib import Path
 from PIL import Image
 from datetime import datetime, timezone
+import google.generativeai as genai
+import base64
+import requests
+from io import BytesIO
 
 # Define directories
 cache_dir = r"C:\Users\Ayan\Documents\GitHub\storage\cache"
 main_dir = r"C:\Users\Ayan\Documents\GitHub\storage\main"
 output_file = r"C:\Users\Ayan\Documents\GitHub\storage\index.json"
 
+# Gemini API Key - You should store this securely
+GEMINI_API_KEY = "AIzaSyCC6WUKOKv7sx9Uyrq6O_EHXyqD_-rkxvw"  # Replace with your actual API key
+
+# Configure the Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+
 # Function to get files without extension
 def get_file_without_extension(filename):
     return os.path.splitext(filename)[0]
+
+# Function to identify image content and categorize it
+def identify_image(image_path):
+    try:
+        # Define predefined categories
+        categories = [
+            "#nature",
+            "#anime",
+            "#art",
+            "#abstract",
+            "#cars",
+            "#architecture",
+            "#minimal",
+            "#tech"
+        ]
+        
+        # Read the image file
+        with Image.open(image_path) as img:
+            # Resize image if too large to save bandwidth and processing time
+            max_size = 800
+            if img.width > max_size or img.height > max_size:
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+            # Convert to bytes
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG")
+            image_bytes = buffer.getvalue()
+        
+        # Set up the Gemini model
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Create the prompt
+        prompt = f"""
+        Analyze this image and categorize it into exactly one of these categories:
+        {', '.join(categories)}
+        
+        Just respond with the category name only, including the # symbol. No explanation.
+        """
+        
+        # Call the Gemini API
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        
+        # Clean up response to get just the category
+        category = response.text.strip()
+        
+        # Validate the category is one of our predefined options
+        if category not in categories:
+            # If not a perfect match, try to match the closest one
+            for valid_category in categories:
+                if valid_category.lower() in category.lower():
+                    category = valid_category
+                    break
+            else:
+                # Default to #art if no match found
+                print(f"Warning: Unrecognized category '{category}' for {image_path}. Defaulting to #art.")
+                category = "#art"
+                
+        return category
+        
+    except Exception as e:
+        print(f"Error identifying image {image_path}: {str(e)}")
+        return "#art"  # Default category on error
 
 # Function to determine resolution category and orientation
 def get_resolution_info(image_path):
@@ -112,7 +185,11 @@ if os.path.exists(main_dir):
 result = []
 new_entries = 0
 updated_entries = 0
+batch_size = 15
+images_processed = 0
+entries_to_process = []
 
+# First, collect all entries that need processing
 for base_name in set(cache_files.keys()).union(set(main_files.keys())):
     cache_file = cache_files.get(base_name, "")
     main_file = main_files.get(base_name, "")
@@ -123,6 +200,8 @@ for base_name in set(cache_files.keys()).union(set(main_files.keys())):
             # Use existing entry but update if cache or main file has changed
             entry = existing_entries[base_name]
             changed = False
+            needs_category_update = False
+            main_path = None
             
             if entry.get('file_cache_name', '') != cache_file:
                 entry['file_cache_name'] = cache_file
@@ -142,6 +221,7 @@ for base_name in set(cache_files.keys()).union(set(main_files.keys())):
                             "orientation": resolution_info["orientation"],
                             "timestamp": get_file_timestamp(main_path)
                         })
+                        needs_category_update = True
                 changed = True
             elif not "timestamp" in entry and main_file:  # Add timestamp if missing
                 main_path = os.path.join(main_dir, main_file)
@@ -153,13 +233,21 @@ for base_name in set(cache_files.keys()).union(set(main_files.keys())):
                 current_timestamp = get_file_timestamp(main_path)
                 if is_newer_timestamp(current_timestamp, entry.get("timestamp", "")):
                     entry["timestamp"] = current_timestamp
+                    needs_category_update = True
                     changed = True
-                    print(f"Updated timestamp for: {base_name}")
             
-            if changed:
+            # Add category if missing or needs update
+            if main_file and (not "category" in entry or needs_category_update):
+                main_path = os.path.join(main_dir, main_file)
+                if os.path.isfile(main_path):
+                    entries_to_process.append((entry, main_path, base_name, "update"))
+            
+            if changed and not needs_category_update:
                 updated_entries += 1
-                print(f"Updated: {base_name}")
-            result.append(entry)
+                print(f"Updated metadata for: {base_name}")
+            
+            if not needs_category_update:
+                result.append(entry)
         else:
             # Create a new entry
             entry = {
@@ -180,17 +268,49 @@ for base_name in set(cache_files.keys()).union(set(main_files.keys())):
                         "orientation": resolution_info["orientation"],
                         "timestamp": get_file_timestamp(main_path)
                     })
+                    entries_to_process.append((entry, main_path, base_name, "new"))
+                else:
+                    result.append(entry)
+                    new_entries += 1
             elif cache_file:  # If no main file but cache file exists, get timestamp from cache
                 cache_path = os.path.join(cache_dir, cache_file)
                 if os.path.isfile(cache_path):
                     entry["timestamp"] = get_file_timestamp(cache_path)
-            
-            result.append(entry)
-            new_entries += 1
-            print(f"New: {base_name}")
+                    entries_to_process.append((entry, cache_path, base_name, "new"))
+                else:
+                    result.append(entry)
+                    new_entries += 1
+            else:
+                result.append(entry)
+                new_entries += 1
+
+# Process images in batches with pauses
+print(f"Collected {len(entries_to_process)} entries that need image analysis")
+batch_count = 0
+
+for i, (entry, image_path, base_name, entry_type) in enumerate(entries_to_process):
+    # Check if we need to pause after processing a batch
+    if i > 0 and i % batch_size == 0:
+        batch_count += 1
+        print(f"\nCompleted batch {batch_count}. Processed {i}/{len(entries_to_process)} images.")
+        print(f"Pausing for 60 seconds before the next batch...\n")
+        time.sleep(60)  # Pause for 1 minute
+    
+    # Identify image category
+    category = identify_image(image_path)
+    entry["category"] = category
+    
+    # Add to result and update counters
+    result.append(entry)
+    if entry_type == "new":
+        new_entries += 1
+        print(f"New ({i+1}/{len(entries_to_process)}): {base_name} - {category}")
+    else:
+        updated_entries += 1
+        print(f"Updated ({i+1}/{len(entries_to_process)}): {base_name} - {category}")
 
 # Write to JSON file
 with open(output_file, 'w', encoding='utf-8') as f:
     json.dump(result, f, indent=4)
 
-print(f"Index created successfully: {len(result)} total entries ({new_entries} new, {updated_entries} updated)")
+print(f"\nIndex created successfully: {len(result)} total entries ({new_entries} new, {updated_entries} updated)")
