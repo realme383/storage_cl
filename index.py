@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 from PIL import Image
+from datetime import datetime, timezone
 
 # Define directories
 cache_dir = r"C:\Users\Ayan\Documents\GitHub\storage\cache"
@@ -49,6 +50,32 @@ def get_resolution_info(image_path):
             "resolution": "Unknown",
             "orientation": "Unknown"
         }
+
+# Function to get file timestamp in ISO format
+def get_file_timestamp(file_path):
+    try:
+        mod_time = os.path.getmtime(file_path)
+        # Convert Unix timestamp to ISO format string
+        dt_object = datetime.fromtimestamp(mod_time, tz=timezone.utc)
+        iso_timestamp = dt_object.isoformat()
+        return iso_timestamp
+    except Exception as e:
+        print(f"Error getting timestamp for {file_path}: {str(e)}")
+        return ""
+
+# Function to compare two ISO format timestamps
+def is_newer_timestamp(timestamp1, timestamp2):
+    if not timestamp1:
+        return False
+    if not timestamp2:
+        return True
+    try:
+        dt1 = datetime.fromisoformat(timestamp1)
+        dt2 = datetime.fromisoformat(timestamp2)
+        return dt1 > dt2
+    except Exception as e:
+        print(f"Error comparing timestamps: {str(e)}")
+        return False
 
 # Load existing index.json if it exists
 existing_entries = {}
@@ -112,14 +139,26 @@ for base_name in set(cache_files.keys()).union(set(main_files.keys())):
                             "width": resolution_info["width"],
                             "height": resolution_info["height"],
                             "resolution": resolution_info["resolution"],
-                            "orientation": resolution_info["orientation"]
+                            "orientation": resolution_info["orientation"],
+                            "timestamp": get_file_timestamp(main_path)
                         })
                 changed = True
+            elif not "timestamp" in entry and main_file:  # Add timestamp if missing
+                main_path = os.path.join(main_dir, main_file)
+                if os.path.isfile(main_path):
+                    entry["timestamp"] = get_file_timestamp(main_path)
+                    changed = True
+            elif main_file:  # Update timestamp if file was modified
+                main_path = os.path.join(main_dir, main_file)
+                current_timestamp = get_file_timestamp(main_path)
+                if is_newer_timestamp(current_timestamp, entry.get("timestamp", "")):
+                    entry["timestamp"] = current_timestamp
+                    changed = True
+                    print(f"Updated timestamp for: {base_name}")
             
             if changed:
                 updated_entries += 1
                 print(f"Updated: {base_name}")
-            
             result.append(entry)
         else:
             # Create a new entry
@@ -132,14 +171,19 @@ for base_name in set(cache_files.keys()).union(set(main_files.keys())):
             # Add resolution information if main file exists
             if main_file:
                 main_path = os.path.join(main_dir, main_file)
-                if os.path.isfile(main_path):  # Fixed: removed extra parenthesis
+                if os.path.isfile(main_path):
                     resolution_info = get_resolution_info(main_path)
                     entry.update({
                         "width": resolution_info["width"],
                         "height": resolution_info["height"],
                         "resolution": resolution_info["resolution"],
-                        "orientation": resolution_info["orientation"]
+                        "orientation": resolution_info["orientation"],
+                        "timestamp": get_file_timestamp(main_path)
                     })
+            elif cache_file:  # If no main file but cache file exists, get timestamp from cache
+                cache_path = os.path.join(cache_dir, cache_file)
+                if os.path.isfile(cache_path):
+                    entry["timestamp"] = get_file_timestamp(cache_path)
             
             result.append(entry)
             new_entries += 1
