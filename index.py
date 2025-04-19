@@ -18,6 +18,7 @@ cache_dir = r"D:\storage\cache"
 main_dir = r"D:\storage\main"
 output_file = r"D:\storage\index.json"
 
+
 # Get Gemini API Key from environment variables ( dont be a fool like me and hardcode it eehehheh)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
