@@ -11,7 +11,7 @@ warnings.simplefilter('ignore', Image.DecompressionBombWarning)
 Image.MAX_IMAGE_PIXELS = None
 
 # Define source and destination directories
-source_dir = r"C:\Users\Ayan\Pictures\up\upscayl_png_high-fidelity-4x_4x"
+source_dir = r"C:\Users\Ayan\Pictures\up\upscayl_png_digital-art-4x_4x"
 destination_dir = r"D:\storage\cache"
 main_dir = r"D:\storage\main"
 
